@@ -1,100 +1,112 @@
+/**
+ * Realtime store backed by a PartyKit room (one room per session id).
+ *
+ * The server holds the canonical Session state; this module is a thin
+ * client cache + dispatcher. State arrives via WebSocket messages and
+ * is exposed to React via useSyncExternalStore.
+ *
+ * Public API:
+ *   initSession(s)         - leader-only; seeds a brand-new room
+ *   dispatch(id, action)   - fire-and-forget; server applies the reducer
+ *   endSession(id)         - wipes server state and closes the socket
+ *   useSession(id)         - { loading, session } reactive snapshot
+ *   usePhaseTimeout(...)   - schedule callback at phaseEndsAt
+ */
 import { useEffect, useSyncExternalStore } from 'react';
-import { Action, reduce } from './session';
-import { Session } from './types';
+import PartySocket from 'partysocket';
+import type { Action } from './session';
+import type { Session } from './types';
 
-const KEY = (id: string) => `session:${id}`;
-const CHANNEL = (id: string) => `session:${id}`;
+const HOST = import.meta.env.VITE_PARTYKIT_HOST || 'localhost:1999';
 
-const channels = new Map<string, BroadcastChannel>();
-const listeners = new Map<string, Set<() => void>>();
-// Stable snapshot cache for useSyncExternalStore: same raw string → same object
-// reference so React doesn't see "changed" data on every render.
-const snapshotCache = new Map<string, { raw: string | null; parsed: Session | null }>();
+export type SessionSnapshot =
+  | { loading: true; session: null }
+  | { loading: false; session: Session | null };
 
-function getChannel(id: string): BroadcastChannel {
-  let ch = channels.get(id);
-  if (!ch) {
-    ch = new BroadcastChannel(CHANNEL(id));
-    ch.addEventListener('message', () => notify(id));
-    channels.set(id, ch);
-  }
-  return ch;
-}
+type SocketEntry = {
+  socket: PartySocket;
+  snapshot: SessionSnapshot;
+  listeners: Set<() => void>;
+};
 
-function notify(id: string) {
-  const set = listeners.get(id);
-  if (!set) return;
-  for (const fn of set) fn();
-}
+const entries = new Map<string, SocketEntry>();
+const LOADING: SessionSnapshot = Object.freeze({ loading: true, session: null });
+const ENDED: SessionSnapshot = Object.freeze({ loading: false, session: null });
 
-export function loadSession(id: string): Session | null {
-  const raw = localStorage.getItem(KEY(id));
-  const cached = snapshotCache.get(id);
-  if (cached && cached.raw === raw) return cached.parsed;
-  let parsed: Session | null = null;
-  if (raw) {
+function ensureEntry(id: string): SocketEntry {
+  const existing = entries.get(id);
+  if (existing) return existing;
+  const socket = new PartySocket({ host: HOST, room: id });
+  const entry: SocketEntry = { socket, snapshot: LOADING, listeners: new Set() };
+  socket.addEventListener('message', (e) => {
+    let msg: { type: string; session?: Session | null };
     try {
-      parsed = JSON.parse(raw) as Session;
+      msg = JSON.parse(e.data as string);
     } catch {
-      parsed = null;
+      return;
     }
-  }
-  snapshotCache.set(id, { raw, parsed });
-  return parsed;
+    if (msg.type === 'state') {
+      entry.snapshot = msg.session
+        ? { loading: false, session: msg.session }
+        : ENDED;
+      notify(entry);
+    } else if (msg.type === 'ended') {
+      entry.snapshot = ENDED;
+      notify(entry);
+    }
+  });
+  entries.set(id, entry);
+  return entry;
 }
 
-export function saveSession(s: Session) {
-  localStorage.setItem(KEY(s.id), JSON.stringify(s));
-  getChannel(s.id).postMessage('update');
-  notify(s.id);
+function notify(entry: SocketEntry) {
+  for (const fn of entry.listeners) fn();
 }
 
-export function deleteSession(id: string) {
-  localStorage.removeItem(KEY(id));
-  getChannel(id).postMessage('update');
-  notify(id);
+function send(entry: SocketEntry, msg: unknown) {
+  // partysocket buffers messages sent before the connection opens.
+  entry.socket.send(JSON.stringify(msg));
 }
 
-export function dispatch(id: string, action: Action): Session | null {
-  const current = loadSession(id);
-  if (!current) return null;
-  const next = reduce(current, action);
-  if (next === current) return current;
-  saveSession(next);
-  return next;
+export function initSession(s: Session): void {
+  const entry = ensureEntry(s.id);
+  // Optimistic local snapshot so the leader doesn't see a "loading" flash.
+  entry.snapshot = { loading: false, session: s };
+  notify(entry);
+  send(entry, { type: 'init', session: s });
 }
 
-export function subscribe(id: string, fn: () => void): () => void {
-  let set = listeners.get(id);
-  if (!set) {
-    set = new Set();
-    listeners.set(id, set);
-  }
-  set.add(fn);
-  // Also listen to storage events for cross-tab sync (BroadcastChannel covers
-  // most cases but storage events catch tabs that opened before our channel).
-  const onStorage = (e: StorageEvent) => {
-    if (e.key === KEY(id)) fn();
-  };
-  window.addEventListener('storage', onStorage);
-  // Make sure the channel is alive
-  getChannel(id);
+export function dispatch(id: string, action: Action): void {
+  send(ensureEntry(id), { type: 'dispatch', action });
+}
+
+export function endSession(id: string): void {
+  const entry = entries.get(id);
+  if (!entry) return;
+  send(entry, { type: 'end' });
+  setTimeout(() => {
+    entry.socket.close();
+    entries.delete(id);
+  }, 200);
+}
+
+function subscribe(id: string, fn: () => void): () => void {
+  const entry = ensureEntry(id);
+  entry.listeners.add(fn);
   return () => {
-    set!.delete(fn);
-    window.removeEventListener('storage', onStorage);
+    entry.listeners.delete(fn);
   };
 }
 
-export function useSession(id: string): Session | null {
-  const session = useSyncExternalStore(
+export function useSession(id: string): SessionSnapshot {
+  return useSyncExternalStore(
     (cb) => subscribe(id, cb),
-    () => loadSession(id),
-    () => null,
+    () => ensureEntry(id).snapshot,
+    () => LOADING,
   );
-  return session;
 }
 
-/** Hook: schedule a callback to fire when phaseEndsAt elapses, in every tab. */
+/** Schedule a callback to fire when phaseEndsAt elapses. */
 export function usePhaseTimeout(
   session: Session | null,
   onElapsed: () => void,

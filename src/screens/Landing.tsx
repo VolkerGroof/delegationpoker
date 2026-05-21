@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { createSession } from '../lib/session';
 import { freshParticipantId, saveIdentity } from '../lib/identity';
-import { saveSession } from '../lib/store';
+import { initSession } from '../lib/store';
 
 export function Landing() {
   const nav = useNavigate();
@@ -9,7 +9,7 @@ export function Landing() {
   const startSession = () => {
     const participantId = freshParticipantId();
     const session = createSession({ id: participantId, name: 'Leader', isLeader: true });
-    saveSession(session);
+    initSession(session);
     saveIdentity(session.id, { participantId, name: '' });
     nav(`/s/${session.id}`);
   };

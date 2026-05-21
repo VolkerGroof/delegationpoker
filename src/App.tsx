@@ -22,7 +22,7 @@ export function App() {
 
 function SessionRoute() {
   const { id } = useParams<{ id: string }>();
-  const session = useSession(id ?? '');
+  const snapshot = useSession(id ?? '');
   const [identity, setIdentity] = useState<Identity | null>(null);
 
   useEffect(() => {
@@ -36,13 +36,23 @@ function SessionRoute() {
   }, [id]);
 
   if (!id || !identity) return <main className="screen"><p>Loading…</p></main>;
+
+  if (snapshot.loading) {
+    return (
+      <main className="screen">
+        <p className="muted">Connecting to session…</p>
+      </main>
+    );
+  }
+
+  const session = snapshot.session;
   if (!session) {
     return (
       <main className="screen">
         <h1>Session not found</h1>
         <p className="muted">
-          This session may have ended or never existed on this device. (Local prototype: sessions
-          live in this browser only and don't sync across machines.)
+          This session has ended or never existed. Sessions are erased as soon as the leader
+          clicks End, and after 24 hours of inactivity.
         </p>
         <a href="/" className="btn btn-primary">Back to start</a>
       </main>

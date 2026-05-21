@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DELEGATION_LEVELS, Session, Participant } from '../lib/types';
-import { deleteSession } from '../lib/store';
+import { endSession } from '../lib/store';
 import { clearIdentity } from '../lib/identity';
 import { downloadElementAsPng } from '../lib/exportPng';
 import { DelegationCard } from '../components/DelegationCard';
@@ -22,10 +22,10 @@ export function Results({ session, me }: Props) {
     await downloadElementAsPng(tableRef.current, `delegation-poker-${session.id}.png`);
   };
 
-  const endSession = () => {
+  const onEndSession = () => {
     if (!confirm('End the session? All session data will be erased.')) return;
     clearIdentity(session.id);
-    deleteSession(session.id);
+    endSession(session.id);
     nav('/');
   };
 
@@ -38,7 +38,7 @@ export function Results({ session, me }: Props) {
             Download as PNG
           </button>
           {me.isLeader && (
-            <button className="btn btn-ghost" onClick={endSession}>
+            <button className="btn btn-ghost" onClick={onEndSession}>
               End session
             </button>
           )}

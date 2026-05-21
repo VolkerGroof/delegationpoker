@@ -28,3 +28,6 @@ desktop.ini
 .env
 .env.*.local
 .env.local
+
+# PartyKit local dev state
+.partykit/
