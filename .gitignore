@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.vite/
+
+# TypeScript
+*.tsbuildinfo
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS / editor / Office temp files
+.DS_Store
+Thumbs.db
+desktop.ini
+~$*
+*.swp
+.idea/
+.vscode/
+
+# Vercel
+.vercel/
+.env
+.env.*.local
+.env.local
